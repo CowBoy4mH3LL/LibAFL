@@ -4,9 +4,9 @@ use core::{
     fmt::{self, Debug, Formatter},
     time::Duration,
 };
-#[cfg(emulation_mode = "usermode")]
+#[cfg(feature = "usermode")]
 use std::ptr;
-#[cfg(emulation_mode = "systemmode")]
+#[cfg(feature = "systemmode")]
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use libafl::{
@@ -31,16 +31,13 @@ use libafl_bolts::{
     os::unix_signals::{ucontext_t, Signal},
     tuples::RefIndexable,
 };
-#[cfg(emulation_mode = "systemmode")]
+#[cfg(feature = "systemmode")]
 use libafl_qemu_sys::libafl_exit_request_timeout;
-#[cfg(emulation_mode = "usermode")]
+#[cfg(feature = "usermode")]
 use libafl_qemu_sys::libafl_qemu_handle_crash;
-#[cfg(emulation_mode = "usermode")]
-use libafl_qemu_sys::siginfo_t;
-#[cfg(emulation_mode = "systemmode")]
 use libc::siginfo_t;
 
-#[cfg(emulation_mode = "usermode")]
+#[cfg(feature = "usermode")]
 use crate::EmulatorModules;
 use crate::{command::CommandManager, modules::EmulatorModuleTuple, Emulator, EmulatorDriver};
 
@@ -59,28 +56,36 @@ where
 /// # Safety
 ///
 /// This should be used as a crash handler, and nothing else.
-#[cfg(emulation_mode = "usermode")]
-unsafe fn inproc_qemu_crash_handler(
+#[cfg(feature = "usermode")]
+unsafe fn inproc_qemu_crash_handler<ET, S>(
     signal: Signal,
     info: &mut siginfo_t,
     mut context: Option<&mut ucontext_t>,
     _data: &mut InProcessExecutorHandlerData,
-) {
+) where
+    ET: EmulatorModuleTuple<S>,
+    S: UsesInput + Unpin,
+{
     let puc = match &mut context {
         Some(v) => ptr::from_mut::<ucontext_t>(*v) as *mut c_void,
         None => ptr::null_mut(),
     };
-    libafl_qemu_handle_crash(signal as i32, ptr::from_mut::<siginfo_t>(info), puc);
+
+    // run modules' crash callback
+    if let Some(emulator_modules) = EmulatorModules::<ET, S>::emulator_modules_mut() {
+        emulator_modules.modules_mut().on_crash_all();
+    }
+
+    libafl_qemu_handle_crash(signal as i32, info, puc);
 }
 
-#[cfg(emulation_mode = "systemmode")]
+#[cfg(feature = "systemmode")]
 pub(crate) static BREAK_ON_TMOUT: AtomicBool = AtomicBool::new(false);
 
 /// # Safety
 /// Can call through the `unix_signal_handler::inproc_timeout_handler`.
 /// Calling this method multiple times concurrently can lead to race conditions.
-#[cfg(emulation_mode = "systemmode")]
-pub unsafe fn inproc_qemu_timeout_handler<E, EM, OF, Z>(
+pub unsafe fn inproc_qemu_timeout_handler<E, EM, ET, OF, S, Z>(
     signal: Signal,
     info: &mut siginfo_t,
     context: Option<&mut ucontext_t>,
@@ -88,16 +93,36 @@ pub unsafe fn inproc_qemu_timeout_handler<E, EM, OF, Z>(
 ) where
     E: HasObservers + HasInProcessHooks<E::State> + Executor<EM, Z>,
     E::Observers: ObserversTuple<E::Input, E::State>,
-    EM: EventFirer<State = E::State> + EventRestarter<State = E::State>,
-    OF: Feedback<EM, E::Input, E::Observers, E::State>,
     E::State: HasExecutions + HasSolutions + HasCorpus,
+    EM: EventFirer<State = E::State> + EventRestarter<State = E::State>,
+    ET: EmulatorModuleTuple<S>,
+    OF: Feedback<EM, E::Input, E::Observers, E::State>,
+    S: State + Unpin,
     Z: HasObjective<Objective = OF, State = E::State>,
     <<E as UsesState>::State as HasSolutions>::Solutions: Corpus<Input = E::Input>, //delete me
     <<<E as UsesState>::State as HasCorpus>::Corpus as Corpus>::Input: Clone,       //delete me
 {
-    if BREAK_ON_TMOUT.load(Ordering::Acquire) {
-        libafl_exit_request_timeout();
-    } else {
+    #[cfg(feature = "systemmode")]
+    {
+        if BREAK_ON_TMOUT.load(Ordering::Acquire) {
+            libafl_exit_request_timeout();
+        } else {
+            libafl::executors::hooks::unix::unix_signal_handler::inproc_timeout_handler::<
+                E,
+                EM,
+                OF,
+                Z,
+            >(signal, info, context, data);
+        }
+    }
+
+    #[cfg(feature = "usermode")]
+    {
+        // run modules' crash callback
+        if let Some(emulator_modules) = EmulatorModules::<ET, S>::emulator_modules_mut() {
+            emulator_modules.modules_mut().on_timeout_all();
+        }
+
         libafl::executors::hooks::unix::unix_signal_handler::inproc_timeout_handler::<E, EM, OF, Z>(
             signal, info, context, data,
         );
@@ -151,9 +176,10 @@ where
             harness_fn, emulator, observers, fuzzer, state, event_mgr, timeout,
         )?;
 
-        #[cfg(emulation_mode = "usermode")]
+        #[cfg(feature = "usermode")]
         {
-            inner.inprocess_hooks_mut().crash_handler = inproc_qemu_crash_handler as *const c_void;
+            inner.inprocess_hooks_mut().crash_handler =
+                inproc_qemu_crash_handler::<ET, S> as *const c_void;
 
             let handler = |emulator_modules: &mut EmulatorModules<ET, S>, host_sig| {
                 eprintln!("Crashed with signal {host_sig}");
@@ -175,15 +201,14 @@ where
             }
         }
 
-        #[cfg(emulation_mode = "systemmode")]
-        {
-            inner.inprocess_hooks_mut().timeout_handler = inproc_qemu_timeout_handler::<
-                StatefulInProcessExecutor<'a, H, OT, S, Emulator<CM, ED, ET, S, SM>>,
-                EM,
-                OF,
-                Z,
-            > as *const c_void;
-        }
+        inner.inprocess_hooks_mut().timeout_handler = inproc_qemu_timeout_handler::<
+            StatefulInProcessExecutor<'a, H, OT, S, Emulator<CM, ED, ET, S, SM>>,
+            EM,
+            ET,
+            OF,
+            S,
+            Z,
+        > as *const c_void;
 
         Ok(Self {
             inner,
@@ -195,7 +220,7 @@ where
         &self.inner
     }
 
-    #[cfg(emulation_mode = "systemmode")]
+    #[cfg(feature = "systemmode")]
     pub fn break_on_timeout(&mut self) {
         BREAK_ON_TMOUT.store(true, Ordering::Release);
     }

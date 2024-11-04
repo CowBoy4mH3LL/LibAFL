@@ -118,7 +118,7 @@ pub extern "C" fn libafl_main() {
     // The Monitor trait define how the fuzzer stats are reported to the user
     let monitor = SimpleMonitor::new(|s| println!("{s}"));
 
-    let context = NautilusContext::from_file(15, "grammar.json");
+    let context = NautilusContext::from_file(15, "grammar.json").unwrap();
 
     let mut event_converter = opt.bytes_broker_port.map(|port| {
         LlmpEventConverter::builder()
@@ -230,8 +230,7 @@ pub extern "C" fn libafl_main() {
                 NautilusSpliceMutator::new(&context),
             ),
             2,
-        )
-        .unwrap();
+        );
 
         if let Some(conv) = event_converter.take() {
             let mut stages = tuple_list!(

@@ -34,14 +34,14 @@ use crate::{GuestAddrKind, GuestReg, Regs};
 pub mod config;
 use config::{QemuConfig, QemuConfigBuilder, QEMU_CONFIG};
 
-#[cfg(emulation_mode = "usermode")]
+#[cfg(feature = "usermode")]
 mod usermode;
-#[cfg(emulation_mode = "usermode")]
+#[cfg(feature = "usermode")]
 pub use usermode::*;
 
-#[cfg(emulation_mode = "systemmode")]
+#[cfg(feature = "systemmode")]
 mod systemmode;
-#[cfg(emulation_mode = "systemmode")]
+#[cfg(feature = "systemmode")]
 #[allow(unused_imports)]
 pub use systemmode::*;
 
@@ -55,6 +55,18 @@ pub enum QemuError {
     Init(QemuInitError),
     Exit(QemuExitError),
     RW(QemuRWError),
+}
+
+impl From<QemuError> for libafl::Error {
+    fn from(qemu_error: QemuError) -> Self {
+        libafl::Error::runtime(qemu_error)
+    }
+}
+
+impl From<QemuError> for String {
+    fn from(qemu_error: QemuError) -> Self {
+        format!("LibAFL QEMU Error: {qemu_error:?}")
+    }
 }
 
 #[derive(Debug)]
@@ -603,7 +615,7 @@ impl Qemu {
             libafl_qemu_init(argc, argv.as_ptr() as *mut *mut ::std::os::raw::c_char);
         }
 
-        #[cfg(emulation_mode = "systemmode")]
+        #[cfg(feature = "systemmode")]
         unsafe {
             libafl_qemu_sys::syx_snapshot_init(true);
             libc::atexit(qemu_cleanup_atexit);
@@ -715,7 +727,7 @@ impl Qemu {
                 },
                 libafl_qemu_sys::libafl_exit_reason_kind_SYNC_EXIT => QemuExitReason::SyncExit,
 
-                #[cfg(emulation_mode = "systemmode")]
+                #[cfg(feature = "systemmode")]
                 libafl_qemu_sys::libafl_exit_reason_kind_TIMEOUT => QemuExitReason::Timeout,
 
                 _ => return Err(QemuExitError::UnknownKind),
@@ -1030,12 +1042,12 @@ impl QemuMemoryChunk {
 
         match self.addr {
             GuestAddrKind::Physical(hwaddr) => {
-                #[cfg(emulation_mode = "usermode")]
+                #[cfg(feature = "usermode")]
                 {
                     // For now the default behaviour is to fall back to virtual addresses
                     qemu.read_mem(hwaddr.try_into().unwrap(), output_sliced)?;
                 }
-                #[cfg(emulation_mode = "systemmode")]
+                #[cfg(feature = "systemmode")]
                 unsafe {
                     qemu.read_phys_mem(hwaddr, output_sliced);
                 }
@@ -1064,12 +1076,12 @@ impl QemuMemoryChunk {
 
         match self.addr {
             GuestAddrKind::Physical(hwaddr) => {
-                #[cfg(emulation_mode = "usermode")]
+                #[cfg(feature = "usermode")]
                 {
                     // For now the default behaviour is to fall back to virtual addresses
                     qemu.write_mem(hwaddr.try_into().unwrap(), input_sliced)?;
                 }
-                #[cfg(emulation_mode = "systemmode")]
+                #[cfg(feature = "systemmode")]
                 unsafe {
                     qemu.write_phys_mem(hwaddr, input_sliced);
                 }

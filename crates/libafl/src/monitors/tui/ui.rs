@@ -61,7 +61,7 @@ impl TuiUi {
             title,
             version,
             enhanced_graphics,
-            show_logs: true,
+            show_logs: false,
             client_idx: 0,
             ..TuiUi::default()
         }
@@ -112,16 +112,16 @@ impl TuiUi {
             .constraints(if self.show_logs {
                 if cfg!(feature = "introspection") {
                     [
-                        Constraint::Percentage(41),
-                        Constraint::Percentage(44),
-                        Constraint::Percentage(15),
+                        Constraint::Percentage(25),
+                        Constraint::Percentage(25),
+                        Constraint::Percentage(50),
                     ]
                     .as_ref()
                 } else {
                     [
-                        Constraint::Percentage(20),
-                        Constraint::Percentage(48),
-                        Constraint::Percentage(32),
+                        Constraint::Percentage(25),
+                        Constraint::Percentage(25),
+                        Constraint::Percentage(50),
                     ]
                     .as_ref()
                 }

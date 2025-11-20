@@ -26,7 +26,7 @@ use crossterm::{
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use hashbrown::HashMap;
-use libafl_bolts::{ClientId, Error, current_time, format_big_number, format_duration};
+use libafl_bolts::{ClientId, Error, current_time, format_duration};
 use ratatui::{Terminal, backend::CrosstermBackend};
 use typed_builder::TypedBuilder;
 
@@ -380,21 +380,7 @@ impl Monitor for TuiMonitor {
             .update_client_stats_for(sender_id, |client| client.execs_per_sec_pretty(cur_time))?;
         let client = client_stats_manager.client_stats_for(sender_id)?;
 
-        let sender = format!("#{}", sender_id.0);
-        let pad = if event_msg.len() + sender.len() < 13 {
-            " ".repeat(13 - event_msg.len() - sender.len())
-        } else {
-            String::new()
-        };
-        let head = format!("{event_msg}{pad} {sender}");
-        let mut fmt = format!(
-            "[{}] corpus: {}, objectives: {}, executions: {}, exec/sec: {}",
-            head,
-            format_big_number(client.corpus_size()),
-            format_big_number(client.objective_size()),
-            format_big_number(client.executions()),
-            exec_sec
-        );
+        let mut fmt = String::from(event_msg);
         for (key, val) in client.user_stats() {
             write!(fmt, ", {key}: {val}").unwrap();
         }
@@ -410,10 +396,13 @@ impl Monitor for TuiMonitor {
                     .or_default()
                     .grab_data(client);
             })?;
-            while ctx.client_logs.len() >= DEFAULT_LOGS_NUMBER {
-                ctx.client_logs.pop_front();
+            // Filter out UserStats and Testcase logs
+            if !event_msg.contains("UserStats") && !event_msg.contains("Testcase") {
+                while ctx.client_logs.len() >= DEFAULT_LOGS_NUMBER {
+                    ctx.client_logs.pop_front();
+                }
+                ctx.client_logs.push_back(fmt);
             }
-            ctx.client_logs.push_back(fmt);
         }
 
         #[cfg(feature = "introspection")]

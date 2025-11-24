@@ -10,7 +10,7 @@ use alloc::{
     sync::Arc,
     vec::Vec,
 };
-use core::{fmt::Write as _, time::Duration};
+use core::time::Duration;
 use std::{
     io::{self, BufRead, Write},
     panic,
@@ -380,13 +380,20 @@ impl Monitor for TuiMonitor {
             .update_client_stats_for(sender_id, |client| client.execs_per_sec_pretty(cur_time))?;
         let client = client_stats_manager.client_stats_for(sender_id)?;
 
-        let mut fmt = String::from(event_msg);
-        for (key, val) in client.user_stats() {
-            write!(fmt, ", {key}: {val}").unwrap();
-        }
-        for (key, val) in client_stats_manager.aggregated() {
-            write!(fmt, ", {key}: {val}").unwrap();
-        }
+        let fmt = String::from(event_msg);
+        // Removed client stats from logs
+        // for (key, val) in client.user_stats() {
+        // // Filter out edges statistics from logs
+        // if key != "edges" {
+        // write!(fmt, ", {key}: {val}").unwrap();
+        // }
+        // }
+        // for (key, val) in client_stats_manager.aggregated() {
+        // // Filter out edges statistics from logs
+        // if key != "edges" {
+        // write!(fmt, ", {key}: {val}").unwrap();
+        // }
+        // }
 
         {
             let mut ctx = self.context.write().unwrap();
@@ -396,8 +403,11 @@ impl Monitor for TuiMonitor {
                     .or_default()
                     .grab_data(client);
             })?;
-            // Filter out UserStats and Testcase logs
-            if !event_msg.contains("UserStats") && !event_msg.contains("Testcase") {
+            // Filter out UserStats, Testcase, and empty messages from logs
+            if !event_msg.contains("UserStats") 
+                && !event_msg.contains("Testcase") 
+                && !fmt.is_empty() 
+                && fmt != "" {
                 while ctx.client_logs.len() >= DEFAULT_LOGS_NUMBER {
                     ctx.client_logs.pop_front();
                 }
